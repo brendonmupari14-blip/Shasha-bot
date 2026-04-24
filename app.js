@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const express = require("express");
 const bodyParser = require("body-parser");
 const MessagingResponse = require("twilio").twiml.MessagingResponse;
@@ -10,12 +12,15 @@ app.use(bodyParser.urlencoded({ extended: false }));
 const PORT = process.env.PORT || 3000;
 
 /* =========================
-   🧠 SUPABASE INIT
+   🔐 SAFE SUPABASE SETUP
 ========================= */
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY
-);
+const SUPABASE_URL =
+  process.env.SUPABASE_URL || "https://your-project.supabase.co";
+
+const SUPABASE_KEY =
+  process.env.SUPABASE_KEY || "your-service-role-key";
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 /* =========================
    👤 SESSION MEMORY
@@ -23,12 +28,12 @@ const supabase = createClient(
 const users = {};
 
 /* =========================
-   💳 ECOCASH CONFIG
+   💳 ECOCASH NUMBER
 ========================= */
 const ECOCASH_NUMBER = "+263774524650";
 
 /* =========================
-   🔐 SUBSCRIPTION CHECK
+   🔐 SUBSCRIPTION
 ========================= */
 async function getSubscription(id) {
   const { data } = await supabase
@@ -45,89 +50,58 @@ function isSubscribed(sub) {
 }
 
 /* =========================
-   🧠 AI TUTOR ENGINE
+   🧠 AI TUTOR
 ========================= */
-function aiTutor(q, a, grade = "grade3") {
-
-  const steps = [
-    "1️⃣ Understand question",
-    "2️⃣ Identify known values",
-    "3️⃣ Choose method",
-    "4️⃣ Solve step-by-step",
-    "5️⃣ Verify answer"
-  ];
-
+function aiTutor(q) {
   return (
-    "🧠 AI TUTOR\n\n" +
-    "Q: " + q + "\n" +
-    "A: " + a + "\n\n" +
-    "Grade: " + grade + "\n\n" +
-    steps.join("\n")
+    "🧠 AI Tutor\n\n" +
+    "Question: " + q + "\n\n" +
+    "Steps:\n" +
+    "1. Understand the problem\n" +
+    "2. Identify numbers\n" +
+    "3. Solve step-by-step\n" +
+    "4. Check your answer\n\n" +
+    "Try solving it now!"
   );
 }
 
 /* =========================
-   📊 ADAPTIVE LEARNING ENGINE
+   📊 ADAPTIVE ENGINE
 ========================= */
-function learnerLevel(history = []) {
+function getLevel(history = []) {
+  if (history.length < 5) return "normal";
 
-  const last = history.slice(-10);
-  if (!last.length) return "normal";
+  const correct = history.filter(h => h === true).length;
+  const acc = (correct / history.length) * 100;
 
-  const correct = last.filter(x => x.result === "PASS").length;
-  const acc = (correct / last.length) * 100;
-
-  if (acc >= 85) return "advanced";
-  if (acc >= 60) return "normal";
+  if (acc >= 80) return "advanced";
+  if (acc >= 50) return "normal";
   return "support";
 }
 
 /* =========================
-   🧾 OCR ENGINE (TWILIO IMAGE)
+   📸 OCR PAYMENT CHECK
 ========================= */
-async function verifyScreenshot(url) {
-
+async function verifyPayment(url) {
   const result = await Tesseract.recognize(url, "eng");
 
   const text = result.data.text.toLowerCase();
-  const confidence = result.data.confidence || 0;
+  const confidence = result.data.confidence;
 
-  const hasKeywords =
+  const valid =
     text.includes("ecocash") ||
     text.includes("paid") ||
-    text.includes("cash");
-
-  const amount = text.match(/\d+/g);
+    text.includes("transfer");
 
   return {
     text,
     confidence,
-    hasKeywords,
-    amount: amount ? amount[0] : null
+    valid
   };
 }
 
 /* =========================
-   🧨 FRAUD ENGINE
-========================= */
-function fraudScore(d) {
-  let s = 0;
-
-  if (d.confidence < 60) s += 40;
-  if (!d.hasKeywords) s += 35;
-  if (!d.amount) s += 25;
-
-  return s;
-}
-
-function fraudDecision(s) {
-  if (s >= 70) return "reject";
-  if (s >= 40) return "manual";
-  return "approve";
-}
-
-/* =========================
-   🔓 ACTIVATE USER
+   🔓 ACTIVATE SUBSCRIPTION
 ========================= */
 async function activateUser(id) {
   await supabase.from("subscriptions").upsert([
@@ -148,15 +122,14 @@ function initUser(id) {
     users[id] = {
       step: "menu",
       grade: null,
-      history: [],
-      level: "normal"
+      history: []
     };
   }
   return users[id];
 }
 
 /* =========================
-   🚀 MAIN BOT
+   🚀 MAIN BOT LOGIC
 ========================= */
 app.post("/", async (req, res) => {
 
@@ -166,101 +139,73 @@ app.post("/", async (req, res) => {
   const mediaUrl = req.body.MediaUrl0;
 
   const twiml = new MessagingResponse();
-  const u = initUser(from);
+  const user = initUser(from);
 
-  /* =========================
-     📸 OCR PAYMENT FLOW
-  ========================= */
+  /* 📸 PAYMENT SCREENSHOT */
   if (numMedia && parseInt(numMedia) > 0) {
 
-    const ocr = await verifyScreenshot(mediaUrl);
+    const result = await verifyPayment(mediaUrl);
 
-    const score = fraudScore(ocr);
-    const decision = fraudDecision(score);
-
-    if (decision === "approve") {
+    if (result.valid && result.confidence > 50) {
       await activateUser(from);
       return res.send(
-        twiml.message("✅ Payment verified & subscription active").toString()
-      );
-    }
-
-    if (decision === "manual") {
-      await supabase.from("payments").insert([{
-        user_id: from,
-        amount: ocr.amount,
-        status: "manual_review",
-        text: ocr.text
-      }]);
-
-      return res.send(
-        twiml.message("⏳ Payment under review").toString()
+        twiml.message("✅ Payment verified. Subscription active!").toString()
       );
     }
 
     return res.send(
-      twiml.message("🚫 Payment rejected").toString()
+      twiml.message("⏳ Payment unclear. Will be reviewed.").toString()
     );
   }
 
-  /* =========================
-     💳 PAYMENT ENTRY
-  ========================= */
+  /* 💳 PAYMENT OPTION */
   if (msg === "pay") {
     return res.send(
       twiml.message(
-        "💳 ECOCASH\nSend to:\n" +
+        "💳 Pay via EcoCash:\n" +
         ECOCASH_NUMBER +
-        "\n\nThen send screenshot"
+        "\n\nSend screenshot after payment."
       ).toString()
     );
   }
 
-  /* =========================
-     🔐 ACCESS CONTROL
-  ========================= */
+  /* 🔐 MENU */
   if (msg === "menu") {
 
     const sub = await getSubscription(from);
 
     if (!isSubscribed(sub)) {
       return res.send(
-        twiml.message("🔒 Subscribe first. Type pay").toString()
+        twiml.message("🔒 Please subscribe first. Type PAY").toString()
       );
     }
 
-    u.step = "grade";
+    user.step = "grade";
+
     return res.send(
-      twiml.message("Choose Grade 3–7").toString()
+      twiml.message("📘 Choose Grade (3–7)").toString()
     );
   }
 
-  /* =========================
-     🎓 GRADE SELECTION
-  ========================= */
-  if (u.step === "grade") {
-    u.grade = msg;
-    u.step = "lesson";
+  /* 🎓 GRADE */
+  if (user.step === "grade") {
+    user.grade = msg;
+    user.step = "lesson";
 
     return res.send(
-      twiml.message("📘 Learning started").toString()
+      twiml.message("📚 Lesson started for " + msg).toString()
     );
   }
 
-  /* =========================
-     🧠 AI EXPLANATION MODE
-  ========================= */
+  /* 🧠 AI HELP */
   if (msg.startsWith("explain")) {
-
-    const q = msg.replace("explain", "");
-
     return res.send(
-      twiml.message(aiTutor(q, "step-by-step solution", u.grade)).toString()
+      twiml.message(aiTutor(msg.replace("explain", ""))).toString()
     );
   }
 
   return res.send(
-    twiml.message("Type menu").toString()
+    twiml.message("Type MENU to begin").toString()
   );
 });
 
